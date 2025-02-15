@@ -62,13 +62,13 @@ int crtInode;
 /************************** functions *******************/
 /* The commands are the same as the linux terminal ones*/
 
-/* command ------------------> action 
-- mkdir <directory_name>       create new directory
-- touch <filename>             create new file
-- rm <path_to_file>
-- rmdir <path_to_directory>
-- cd <path_to_directory>
-- ls <path>
+/* command ------------------>      action 
+- mkdir <path/directory_name>       create new directory
+- touch <path/file_name>            create new file
+- rm <path_to_file>                 remove a file
+- rmdir <path_to_directory>         remove an empty directory
+- cd <path_to_directory>            change current location
+- ls <path>                         list directory/file
 */
 
 void execute_command(char **, int);
@@ -91,7 +91,7 @@ int find_free_inode();
 int updateMemory(void*, int, int);
 void parse(char *, int*, char **);
 void print_path();
-int find_inode_of_path(unsigned char *, int);
+int find_inode_of_path(unsigned char *, int, int* ,unsigned char **);
 int find_path_of_inode (int, unsigned char **);
 int is_in_directory(unsigned char*, int);
 
@@ -207,7 +207,7 @@ void execute_command(char **argv, int argc) {
 /*****************************************************************/
 // remove directory if it s empty
 void rm_dir_cmd(unsigned char *path) {
-    int inode = find_inode_of_path(path, crtInode);
+    int inode = find_inode_of_path(path, crtInode, NULL, NULL);
     // verify if inode is valid
     if (inode < 0 || inode > MAX_INODES || inode == ROOT_INODE_INDEX || inode == crtInode) {
         printf("Calea este incorecta.\n");
@@ -267,7 +267,7 @@ void rm_dir_cmd(unsigned char *path) {
 /*****************************************************************/
 // remove file 
 void rm_file_cmd (unsigned char *path) {
-    int inode = find_inode_of_path(path, crtInode);
+    int inode = find_inode_of_path(path, crtInode, NULL, NULL);
 
     // verify if inode is valid
     if (inode == -1 || inodes[inode].file_type == 1) {
@@ -321,40 +321,43 @@ void rm_file_cmd (unsigned char *path) {
 
 /*****************************************************************/
 // create a file with specified name
-void make_file_cmd(unsigned char *filename) {
-    // 
-    if (strlen(filename) > MAX_FILE_NAME) {
-        printf("Numele fisierului este prea lung.\n");
-    }
-
-    directory dir;
-    if (!extract_data(&dir, crtInode)) {
-        printf("Eroare la extragerea datelor!\n");
-        return;
-    }
-
-    int ok = is_in_directory(filename, crtInode);
-    if (ok == 1) {
-        printf("Fisierul %s exista deja.\n", filename);
-        return;
-    } else if (ok == -1) {
-        printf("Eroare.\n");
-    }
-
+void make_file_cmd(unsigned char *path) {
     int new_inode = find_free_inode();
     if (new_inode == -1) {
         printf("Nu mai exista spatiu.\n");
         return;
     }
-    inodes[new_inode].parent_inode_index = crtInode;
+
+    int directory_inode = 0;
+    // just to not be NULL
+    unsigned char *filename = malloc(1);
+
+    // if returns -2, we know that just last directory from path doesn t exist
+    if (find_inode_of_path(path, crtInode, &directory_inode, &filename) != -2) {
+        printf("Calea este invalida.\n");
+        return;
+    }
+
+    // set inode
+    inodes[new_inode].parent_inode_index = directory_inode;
+    inodes[new_inode].file_type = 0;
+    inodes[new_inode].crtBLocks = 0;
+    set_bit_to_value(bm.inode_map, new_inode, sizeof(bm.inode_map), 1);
+
+
+    directory dir;
+    if (!extract_data(&dir, directory_inode)) {
+        printf("Eroare la extragerea datelor!\n");
+        set_bit_to_value(bm.inode_map, new_inode, sizeof(bm.inode_map), 0);
+        return;
+    }
 
     dir.entries[dir.count].inode_index = new_inode;
     strcpy(dir.entries[dir.count].filename, filename);
     dir.count++;
 
-    set_bit_to_value(bm.inode_map, new_inode, sizeof(bm.inode_map), 1);
 
-    if (!updateMemory(&dir, sizeof(dir), crtInode)) {
+    if (!updateMemory(&dir, sizeof(dir), directory_inode)) {
         set_bit_to_value(bm.inode_map, new_inode, sizeof(bm.inode_map), 0);
         return;
     }
@@ -365,18 +368,22 @@ void make_file_cmd(unsigned char *filename) {
 /*****************************************************************/
 // Change current directory to the specified directory name
 void change_dir_cmd(unsigned char *path) {
+    //printf("hei1\n");
     // initialize current directory
     directory dir;
     if(!extract_data(&dir, crtInode)) {
         printf("Eroare la extragerea datelor.\n");
         return;
     }
+    //printf("hei2\n");
 
-    int new_inode = find_inode_of_path(path, crtInode);
+    int new_inode = find_inode_of_path(path, crtInode, NULL, NULL);
+    //printf("hei3\n");
     if (new_inode == -1) {
         printf("Nu a fost gasit directorul.\n");
         return;
     }
+    
     
     if (inodes[new_inode].file_type == 0) {
         printf("Nu a fost gasit directorul.\n");
@@ -390,12 +397,18 @@ void change_dir_cmd(unsigned char *path) {
 
 /*****************************************************************/
 // this function create a directory with a specified name
-int create_dir_cmd(unsigned char *dir_name) {
-    int parentInode = crtInode;
+int create_dir_cmd(unsigned char *path) {
+    // to not be NULL
+    unsigned char *dir_name = malloc(1);
+    int parent_inode = 0;
+    if (find_inode_of_path(path, crtInode, &parent_inode, &dir_name) != -2) {
+        printf("Can't do a directory.\n");
+        return 0;
+    }
+
     // extract data and make necessary verifications
     directory parent_dir;
-    if (!extract_data(&parent_dir, parentInode)) {
-        //printf("parent inode: %d\n", parent_inode);
+    if (!extract_data(&parent_dir, parent_inode)) {
         printf("Eroare la extragerea datelor!\n");
         return 0;
     };
@@ -424,7 +437,7 @@ int create_dir_cmd(unsigned char *dir_name) {
     // set new inode
     set_bit_to_value(bm.inode_map, new_inode, sizeof(bm.inode_map), 1);
     inodes[new_inode].file_type = 1;
-    inodes[new_inode].parent_inode_index = parentInode;
+    inodes[new_inode].parent_inode_index = parent_inode;
     inodes[new_inode].crtBLocks = 0;
 
     // create new directory
@@ -437,7 +450,7 @@ int create_dir_cmd(unsigned char *dir_name) {
 
     // add default ".." entry
     memcpy(new_dir.entries[1].filename, "..", 2);
-    new_dir.entries[1].inode_index = parentInode;
+    new_dir.entries[1].inode_index = parent_inode;
 
     if (!updateMemory(&new_dir, sizeof(new_dir), new_inode)) {
         set_bit_to_value(bm.inode_map, new_inode, sizeof(bm.inode_map), 0);
@@ -448,7 +461,7 @@ int create_dir_cmd(unsigned char *dir_name) {
     parent_dir.entries[parent_dir.count].inode_index = new_inode;
     strcpy(parent_dir.entries[parent_dir.count++].filename, dir_name);
 
-    updateMemory(&parent_dir, sizeof(parent_dir), parentInode);
+    updateMemory(&parent_dir, sizeof(parent_dir), parent_inode);
 
     printf("Directorul %s a fost creat cu succes.\n", dir_name);
     return 1;
@@ -464,8 +477,8 @@ void list_cmd(int args, char *argv[]) {
         neededInode = crtInode;
     } else if (args == 2) {
         // there s a path
-        neededInode = find_inode_of_path(argv[1], crtInode);
-        if (neededInode == -1) {
+        neededInode = find_inode_of_path(argv[1], crtInode, NULL, NULL);
+        if (neededInode < 0) {
             printf("Calea %s nu este corecta.\n", argv[1]);
             return;
         }
@@ -696,7 +709,7 @@ int set_bit_to_value(unsigned char *arr, int nr_bit, int arr_len_in_bytes, int v
 // extract data from blocks to specific array with inode help
 int extract_data(void *a, int inode_index) {
     // see if inode is valid
-    if (find_bit_value(bm.inode_map, inode_index, sizeof(bm.inode_map)) == 0) {
+    if (find_bit_value(bm.inode_map, inode_index, sizeof(bm.inode_map)) == -1) {
         return 0;
     }
 
@@ -823,42 +836,68 @@ int find_free_inode() {
 
 
 /*****************************************************************/
-int find_inode_of_path(unsigned char *a, int parent_inode) {
-    if (a == NULL) return -1;
-
-    unsigned char *path = strdup(a);
+//this function returns inode of directory/filename
+//returns -2 if path is correct, but the last element isn t 
+//returns -1 if path is wrong
+//!! don t give NULL parameters !!
+int find_inode_of_path(unsigned char *path, int crt_inode, int *parent_inode, unsigned char **last_file_name) {
     if (path == NULL) return -1;
 
+    unsigned char *copy_path = strdup(path);
+    if (copy_path == NULL) return -1;
+
     // verify if it s absolute path
-    if (path[0] == '/') { 
-        parent_inode = ROOT_INODE_INDEX;
+    if (copy_path[0] == '/') { 
+        crt_inode = ROOT_INODE_INDEX;
     }
 
     // token will contain file/dir name
-    char *token = strtok(path, "/");
+    char *token = strtok(copy_path, "/");
+
+    if (parent_inode != NULL) {
+        *parent_inode = crt_inode;
+    }
 
     int is_file = 0;
-    int exist;
+    int exist = 1;
+
     while (token != NULL) {
-        // if token name is greater then maximum is incorrect
+        // copy last name from path
+        if (last_file_name != NULL) {
+            free(*last_file_name);
+            *last_file_name = strdup(token);
+        }
+
         if (strlen(token) > MAX_FILE_NAME) {
-            free(path);
+            free(copy_path);
             return -1;
         }
+
         // if path continues after a file was discovered, is incorrect
         if (is_file == 1) {
-            free(path);
+            free(copy_path);
             return -1;
         }
-        exist = 0;
+
         directory dir;
-        extract_data(&dir, parent_inode);
+        // if can t extract data ,directory doesn t exist
+        if (!extract_data(&dir, crt_inode)) {
+            free(copy_path);
+            return -1;
+        }
+
+        // start_inode will be changed in the next for
+        if (parent_inode != NULL) {
+            *parent_inode = crt_inode;
+        }
 
         // find file/dir
+        exist = 0;
         for (int i = 0; i < dir.count; i++) {
             if (!strcmp(dir.entries[i].filename, token)) {
                 exist = 1;
-                parent_inode = dir.entries[i].inode_index;
+                crt_inode = dir.entries[i].inode_index;
+
                 if (inodes[dir.entries[i].inode_index].file_type == 0) {
                     is_file = 1;
                 }
@@ -866,15 +905,15 @@ int find_inode_of_path(unsigned char *a, int parent_inode) {
             }
         }
         if (exist == 0) {
-            free(path);
-            return -1;
+            // if -2 is returned, we know that last file/directory from path does n exist
+            crt_inode = -2;
         }
         token = strtok(NULL, "/");
     }
 
-    free(path);
+    free(copy_path);
     // will return necessary inode
-    return parent_inode;
+    return crt_inode;
 }
 
 
