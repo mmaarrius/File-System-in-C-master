@@ -549,7 +549,7 @@ void create_dir_cmd(unsigned char *path) {
 
     if (!update_memory(&new_dir, sizeof(new_dir), new_inode)) {
         set_bit_to_value(bm.inode_map, new_inode, sizeof(bm.inode_map), 0);
-        return 0;
+        return;
     }
 
     // update parent directory and new directory entry
