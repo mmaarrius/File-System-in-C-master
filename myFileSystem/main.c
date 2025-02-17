@@ -8,6 +8,7 @@
 #define NR_BLOCKS 1024          // should be divisible with 8 (byte length)
 #define BLOCK_SIZE 1024
 #define MAX_DIRECT_BLOCKS 12    // maximum blocks for file content
+#define MAX_CONTENT_IN_FILE MAX_DIRECT_BLOCKS * BLOCK_SIZE
 #define MAX_INODES 256          // should be divisible with 8 (byte length)
 #define BYTE_LEN 8
 #define MAX_FILE_NAME 30
@@ -15,7 +16,7 @@
 #define BLOCK_MAP_LEN NR_BLOCKS / BYTE_LEN
 #define INODE_MAP_LEN MAX_INODES / BYTE_LEN
 #define ROOT_INODE_INDEX 2
-#define LINESIZE 100
+#define LINESIZE 256
 #define FILESYSTEM_NAME "filesystem.bin"    // represents "disk"
 
 struct superblock {
@@ -56,28 +57,32 @@ typedef struct {
 
 unsigned char disk_buffer[NR_BLOCKS][BLOCK_SIZE] = {0};   // for easy access
 
-unsigned char *path;
 int crtInode;
+unsigned char *path;
 
 /************************** functions *******************/
-/* The commands are the same as the linux terminal ones*/
 
-/* command ------------------>      action 
-- mkdir <path/directory_name>       create new directory
-- touch <path/file_name>            create new file
-- rm <path_to_file>                 remove a file
-- rmdir <path_to_directory>         remove an empty directory
-- cd <path_to_directory>            change current location
-- ls <path>                         list directory/file
+/* COMMAND ------------------------>  ACTION 
+- mkdir <path/directory_name>         create new directory
+- touch <path/file_name>              create new file
+- echo <content> >/>> <path_to_file>  add content to a file
+- rm <path_to_file>                   remove a file
+- rmdir <path_to_directory>           remove an empty directory
+- cd <path_to_directory>              change current location
+- ls <path_to_directory>              list entries of directory
+- pwd                                 show path until current directory
+- cat <path_to_file>                  show content of file
 */
 
 void execute_command(char **, int);
-int create_dir_cmd(unsigned char *);
+void create_dir_cmd(unsigned char *);
 void list_cmd(int, char**);
 void change_dir_cmd(unsigned char*);
 void make_file_cmd(unsigned char*);
 void rm_file_cmd(unsigned char*);
 void rm_dir_cmd(unsigned char*);
+void pwd_cmd();
+void cat_cmd(unsigned char*);
 void exit_cmd();
 
 int file_is_empty(char*);
@@ -85,21 +90,21 @@ int superblock_init();
 int filesystem_init();
 int set_bit_to_value(unsigned char*, int, int, int);
 int find_bit_value(unsigned char*, int, int);
-int findFreeBlockIndex();
+int find_free_block();
 int extract_data(void *, int);
 int find_free_inode();
-int updateMemory(void*, int, int);
+int update_memory(void*, int, int);
 void parse(char *, int*, char **);
 void print_path();
 int find_inode_of_path(unsigned char *, int, int* ,unsigned char **);
 int find_path_of_inode (int, unsigned char **);
-int is_in_directory(unsigned char*, int);
+int add_word_to_file(unsigned char *, int, int);
 
 
 /*****************************************************************/
 
 int main() {
-    printf("Salut! Acesta este sistemul tau de fisiere!\n");
+    printf("Salut! Acesta este sistemul tau de fisiere!\n\n");
 
     filesystem_init();
 
@@ -133,29 +138,8 @@ int main() {
     }
 }
 
-
 /*****************************************************************/
-void exit_cmd() {
-    memmove(disk_buffer[0], &sb, sizeof(struct superblock));
-    memmove(*(disk_buffer + sb.inode_bitmap_start), bm.inode_map, INODE_MAP_LEN);
-    memmove(*(disk_buffer + sb.block_bitmap_start), bm.block_map, BLOCK_MAP_LEN);
-    memmove(*(disk_buffer + sb.inode_table_start), inodes, sizeof(inodes));
-
-    FILE *f = fopen("filesystem.bin", "wb");
-    if (f == NULL) {
-        printf("Eroare.\n");
-    }
-
-    for (int i = 0; i < NR_BLOCKS; i++) {
-        fwrite(disk_buffer[i], BLOCK_SIZE, 1, f);
-    }
-
-    fclose(f);
-
-    exit(0);
-}
-
-/*****************************************************************/
+// just filtrate commands from input
 void execute_command(char **argv, int argc) {
     // make directory command
     if (!strcmp(argv[0], "mkdir")) {
@@ -194,6 +178,63 @@ void execute_command(char **argv, int argc) {
             printf("Argumente incorecte.\n");
         }
     }
+    // write content to file command
+    else if (!strcmp(argv[0], "echo")) {
+        int delete = 1;
+        int sign_position = 0;
+        for (int i = 1; i < argc; i++) {
+            if (!strcmp(argv[i], ">")) {
+                delete = 1;
+                sign_position = i;
+            } else if (!strcmp(argv[i], ">>")) {
+                delete = 0;
+                sign_position = i;
+            }
+        }
+
+        // verify if there s more paths after '>'/'>>'
+        if (argc != (sign_position + 2)) {
+            printf("Argumente incorecte.\n");
+            return;
+        }
+
+        int file_inode = find_inode_of_path(argv[sign_position + 1], crtInode, NULL, NULL);
+        if (file_inode < 0) {
+            printf("Fisierul nu exista.\n");
+            return;
+        }
+
+        // add space between words
+        unsigned char space[] = " ";
+
+        // add every word
+        for (int i = 1; i < sign_position; i++) {
+            if (!add_word_to_file(argv[i], file_inode, delete)) {
+                return;
+            }
+            add_word_to_file(space, file_inode, 0);
+
+            // next words from phrase won t delete last one s
+            delete = 0;
+        }
+        printf("Continutul a fost adaugat.\n");
+    }
+    // show path until now command
+    else if (!strcmp(argv[0], "pwd")) {
+        if (argc == 1) {
+            pwd_cmd();
+        } else {
+            printf("Argumente incorecte.\n");
+        }
+    }
+
+    else if (!strcmp(argv[0], "cat")) {
+        if (argc == 2) {
+            cat_cmd(argv[1]);
+        } else {
+            printf("Argumente incorecte.\n");
+        }
+    }
     // exit and save
     else if (!strcmp(argv[0], "exit")) {
         exit_cmd();
@@ -205,9 +246,64 @@ void execute_command(char **argv, int argc) {
 }
 
 /*****************************************************************/
+// display the path to the current directory
+void pwd_cmd() {
+    unsigned char *path = malloc(1);
+    find_path_of_inode(crtInode, &path);
+    printf("-->%s\n", path);
+}
+
+/*****************************************************************/
+// exit and save filesystem
+void exit_cmd() {
+    // save to buffer
+    memmove(disk_buffer[0], &sb, sizeof(struct superblock));
+    memmove(*(disk_buffer + sb.inode_bitmap_start), bm.inode_map, INODE_MAP_LEN);
+    memmove(*(disk_buffer + sb.block_bitmap_start), bm.block_map, BLOCK_MAP_LEN);
+    memmove(*(disk_buffer + sb.inode_table_start), inodes, sizeof(inodes));
+
+    // save to "disk"
+    FILE *f = fopen("filesystem.bin", "wb");
+    if (f == NULL) {
+        printf("Eroare la salvarea datelor.\n");
+    }
+    for (int i = 0; i < NR_BLOCKS; i++) {
+        fwrite(disk_buffer[i], BLOCK_SIZE, 1, f);
+    }
+
+    fclose(f);
+
+    exit(0);
+}
+
+
+/*****************************************************************/
+// display the content of a file
+void cat_cmd (unsigned char* path) {
+    int file_inode = find_inode_of_path(path, crtInode, NULL, NULL);
+    if (file_inode < 0) {
+        printf("Nu exista fisierul.\n");
+        return;
+    }
+
+    if (inodes[file_inode].file_type == 1) {
+        printf("Este director.\n");
+        return;
+    }
+
+    if (inodes[file_inode].file_size != 0) {
+        unsigned char file[inodes[file_inode].file_size];
+        extract_data(file, file_inode);
+        printf("%s\n", file);
+    }
+}
+
+/*****************************************************************/
 // remove directory if it s empty
 void rm_dir_cmd(unsigned char *path) {
-    int inode = find_inode_of_path(path, crtInode, NULL, NULL);
+    // just to not be NULL
+    unsigned char* dir_name = malloc(1);
+    int inode = find_inode_of_path(path, crtInode, NULL, &dir_name);
     // verify if inode is valid
     if (inode < 0 || inode > MAX_INODES || inode == ROOT_INODE_INDEX || inode == crtInode) {
         printf("Calea este incorecta.\n");
@@ -216,7 +312,7 @@ void rm_dir_cmd(unsigned char *path) {
 
     // verify if it s directory or file
     if (inodes[inode].file_type == 0) {
-        printf("Nu este director.\n");
+        printf("Nu este un director.\n");
         return;
     }
 
@@ -243,7 +339,7 @@ void rm_dir_cmd(unsigned char *path) {
 
     // reset blocks
     dir.count = 0;
-    updateMemory(&dir, sizeof(directory), inode);
+    update_memory(&dir, sizeof(directory), inode);
 
     // reset inode
     set_bit_to_value(bm.inode_map, inode, sizeof(bm.inode_map), 0);
@@ -258,16 +354,18 @@ void rm_dir_cmd(unsigned char *path) {
         }
     }
     parent.count--;
-    updateMemory(&parent, sizeof(directory), parent_inode);
+    update_memory(&parent, sizeof(directory), parent_inode);
 
-    printf("Directorul a fost sters cu succes.\n");
+    printf("Directorul %s a fost sters.\n", dir_name);
 }
 
 
 /*****************************************************************/
-// remove file 
+// remove the file from specified path
 void rm_file_cmd (unsigned char *path) {
-    int inode = find_inode_of_path(path, crtInode, NULL, NULL);
+    // just to not be NULL
+    unsigned char *filename = malloc(1);
+    int inode = find_inode_of_path(path, crtInode, NULL, &filename);
 
     // verify if inode is valid
     if (inode == -1 || inodes[inode].file_type == 1) {
@@ -295,7 +393,7 @@ void rm_file_cmd (unsigned char *path) {
     dir.count--;
 
     // verify the update of memory
-    if (!updateMemory(&dir, sizeof(directory), parent_inode)) {
+    if (!update_memory(&dir, sizeof(directory), parent_inode)) {
         printf("Eroare.\n");
         return;
     }
@@ -305,7 +403,7 @@ void rm_file_cmd (unsigned char *path) {
     inodes[inode].file_size = 0;
 
     // delete file from memory and verify
-    if(!updateMemory(bm.block_map, sizeof(bm.block_map), inode)) {
+    if(!update_memory(bm.block_map, sizeof(bm.block_map), inode)) {
         printf("Nu s a putut sterge fisierul.\n");
         inodes[inode].file_size = old_size;
         return;
@@ -315,7 +413,7 @@ void rm_file_cmd (unsigned char *path) {
     set_bit_to_value(bm.inode_map, inode, sizeof(bm.inode_map), 0);
 
     // success message
-    printf("Fisierul a fost sters cu succes.\n");
+    printf("Fisierul %s a fost sters.\n", filename);
 }
 
 
@@ -357,7 +455,7 @@ void make_file_cmd(unsigned char *path) {
     dir.count++;
 
 
-    if (!updateMemory(&dir, sizeof(dir), directory_inode)) {
+    if (!update_memory(&dir, sizeof(dir), directory_inode)) {
         set_bit_to_value(bm.inode_map, new_inode, sizeof(bm.inode_map), 0);
         return;
     }
@@ -368,23 +466,19 @@ void make_file_cmd(unsigned char *path) {
 /*****************************************************************/
 // Change current directory to the specified directory name
 void change_dir_cmd(unsigned char *path) {
-    //printf("hei1\n");
     // initialize current directory
     directory dir;
     if(!extract_data(&dir, crtInode)) {
         printf("Eroare la extragerea datelor.\n");
         return;
     }
-    //printf("hei2\n");
 
     int new_inode = find_inode_of_path(path, crtInode, NULL, NULL);
-    //printf("hei3\n");
     if (new_inode == -1) {
         printf("Nu a fost gasit directorul.\n");
         return;
     }
-    
-    
+
     if (inodes[new_inode].file_type == 0) {
         printf("Nu a fost gasit directorul.\n");
         return;
@@ -397,42 +491,43 @@ void change_dir_cmd(unsigned char *path) {
 
 /*****************************************************************/
 // this function create a directory with a specified name
-int create_dir_cmd(unsigned char *path) {
+void create_dir_cmd(unsigned char *path) {
     // to not be NULL
     unsigned char *dir_name = malloc(1);
+
     int parent_inode = 0;
     if (find_inode_of_path(path, crtInode, &parent_inode, &dir_name) != -2) {
-        printf("Can't do a directory.\n");
-        return 0;
+        printf("Eroare.\n");
+        return;
     }
 
     // extract data and make necessary verifications
     directory parent_dir;
     if (!extract_data(&parent_dir, parent_inode)) {
         printf("Eroare la extragerea datelor!\n");
-        return 0;
+        return;
     };
 
     if (parent_dir.count >= MAX_FILES_IN_DIRECTORY) {
         printf("Acest director este plin!\n");
-        return 0;
+        return;
     }
 
     if (strlen(dir_name) > MAX_FILE_NAME) {
-        printf("Numele fisierului este prea lung.\n");
-        return 0;
+        printf("Numele directorului este prea lung.\n");
+        return;
     }
 
     for (int i = 0; i < parent_dir.count; i++) {
         if (!strcmp(parent_dir.entries[i].filename, dir_name)) {
-            printf("Nu pot exista doua fisiere cu acelasi nume.\n");
-            return 0;
+            printf("Nu pot exista doua directoare cu acelasi nume.\n");
+            return;
         }
     }
 
     // find inode for director
     int new_inode = find_free_inode();
-    if (new_inode == -1) return 0;
+    if (new_inode == -1) return;
 
     // set new inode
     set_bit_to_value(bm.inode_map, new_inode, sizeof(bm.inode_map), 1);
@@ -452,7 +547,7 @@ int create_dir_cmd(unsigned char *path) {
     memcpy(new_dir.entries[1].filename, "..", 2);
     new_dir.entries[1].inode_index = parent_inode;
 
-    if (!updateMemory(&new_dir, sizeof(new_dir), new_inode)) {
+    if (!update_memory(&new_dir, sizeof(new_dir), new_inode)) {
         set_bit_to_value(bm.inode_map, new_inode, sizeof(bm.inode_map), 0);
         return 0;
     }
@@ -461,10 +556,9 @@ int create_dir_cmd(unsigned char *path) {
     parent_dir.entries[parent_dir.count].inode_index = new_inode;
     strcpy(parent_dir.entries[parent_dir.count++].filename, dir_name);
 
-    updateMemory(&parent_dir, sizeof(parent_dir), parent_inode);
+    update_memory(&parent_dir, sizeof(parent_dir), parent_inode);
 
     printf("Directorul %s a fost creat cu succes.\n", dir_name);
-    return 1;
 }
 
 
@@ -487,7 +581,7 @@ void list_cmd(int args, char *argv[]) {
         return;
     }
 
-    // will print all files/directories from directory
+    // will print all entries from directory
     int file_type = inodes[neededInode].file_type;
     if (file_type == 1) {
         directory dir;
@@ -501,7 +595,7 @@ void list_cmd(int args, char *argv[]) {
 
 
 /*****************************************************************/
-// initiates filesystem: default initaiate & create root/read disk
+// initiates filesystem: (default initialization & create root) / read disk
 int filesystem_init() {
     if (superblock_init()) {
         memmove(bm.inode_map, disk_buffer[sb.inode_bitmap_start], INODE_MAP_LEN);
@@ -537,14 +631,14 @@ int filesystem_init() {
         set_bit_to_value(bm.inode_map, ROOT_INODE_INDEX, sizeof(bm.inode_map), 1);
         //printf("bit: %d", find_bit_value(bm.inode_map, ROOT_INODE_INDEX, sizeof(bm.inode_map)));
 
-        updateMemory(&root, sizeof(root), ROOT_INODE_INDEX);
+        update_memory(&root, sizeof(root), ROOT_INODE_INDEX);
     }
     return 1;
 }
 
 
 /*****************************************************************/
-// this function copies data from file to "buffer" and initiates suberblock
+// this function copies data from "disk" to "buffer" and initiates suberblock
 // return 1 for success
 int superblock_init() {
     FILE *f = fopen(FILESYSTEM_NAME, "rb");
@@ -576,7 +670,7 @@ int superblock_init() {
 /*****************************************************************/
 // find the full path from the current inode to the root
 int find_path_of_inode(int crt_inode, unsigned char **str) {
-    if (str == 0) return 0; // for safety
+    if (str == NULL) return 0; // for safety
 
     int length = 256;       // reasonable length 
     unsigned char *path = malloc(length);
@@ -645,7 +739,59 @@ void print_path() {
     printf("%s> ", path);
 }
 
+
 /*****************************************************************/
+// add any characters to a file
+int add_word_to_file(unsigned char *content, int file_inode, int delete) {
+    //verify inode
+    if (find_bit_value(bm.inode_map, file_inode, sizeof(bm.inode_map)) == 0) {
+        printf("Eroare.\n");
+        return 0;
+    } else if (inodes[file_inode].file_type == 1) {
+        printf("Nu este fisier.\n");
+        return 0;
+    }
+
+    if (strlen(content) + inodes[file_inode].file_size > MAX_CONTENT_IN_FILE) {
+        printf("Fisierul este plin.\n");
+        return 0;
+    }
+
+    // if user wants to delete the old content of file
+    if (delete == 1) {
+        update_memory(NULL, 0, file_inode);
+    }
+
+    int file_size = inodes[file_inode].file_size;
+    int content_size = strlen(content);
+
+    // for adding '\0'
+    if (file_size == 0) file_size++;
+
+
+    unsigned char *file = calloc(content_size + file_size, 1);
+    if (!file) {
+        printf("Eroare la alocarea memorie!\n");
+        return 0;
+    }
+    
+    file[content_size + file_size] = '\0';
+
+
+    // extract old file content
+    extract_data(file, file_inode);
+
+    // add new content
+    strncpy(file + file_size - 1, content, content_size);
+
+    update_memory(file, content_size + file_size, file_inode);
+
+    return 1;
+} 
+
+
+/*****************************************************************/
+// parse arguments from stdin
 void parse(char *in, int *argc, char *argv[]) {
     char space[] = " ";
     int count = 0;
@@ -706,15 +852,15 @@ int set_bit_to_value(unsigned char *arr, int nr_bit, int arr_len_in_bytes, int v
 
 
 /*****************************************************************/
-// extract data from blocks to specific array with inode help
-int extract_data(void *a, int inode_index) {
+// extract data from the blocks specified by inode and put them in the array
+int extract_data(void *array, int inode_index) {
     // see if inode is valid
     if (find_bit_value(bm.inode_map, inode_index, sizeof(bm.inode_map)) == -1) {
         return 0;
     }
 
     // cast array
-    unsigned char* arr = (unsigned char*)a;
+    unsigned char* arr = (unsigned char*)array;
 
     int size = inodes[inode_index].file_size;
     int crtBlocks = inodes[inode_index].crtBLocks;
@@ -747,10 +893,11 @@ int find_bit_value(unsigned char* arr, int pos, int size) {
 
 
 /*****************************************************************/
-// if size of a file/directory is modified, update disk, bitmap of blocks and inode fields that manage memory 
-// can be used to delete blocks, add  blocks, but another changes as delete inode, add inode,
-// update bm of inodes etc, should be changed manually
-int updateMemory(void *a, int size, int inode_index) {
+
+/* if size of a file/directory is modified, update disk, bitmap of blocks and inode fields that manage memory.
+Can be used to delete blocks, add  blocks, but another changes as delete inode, add inode,
+update bm of inodes etc, should be changed manually */
+int update_memory(void *a, int size, int inode_index) {
     unsigned char *arr = (unsigned char *)a;
     // calculate all blocks that we need
     int requiredBlocks = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -779,7 +926,7 @@ int updateMemory(void *a, int size, int inode_index) {
     // if necessary, allocate new blocks
     for (int i = usedBlocks; i < requiredBlocks; i++) {
         // looking for free block
-        int free_block = findFreeBlockIndex();
+        int free_block = find_free_block();
 
         // write data to the newly allocated block
         memmove(disk_buffer[free_block], arr + BLOCK_SIZE * i, BLOCK_SIZE);
@@ -806,7 +953,7 @@ int updateMemory(void *a, int size, int inode_index) {
 /*****************************************************************/
 // find index of free block
 // return index or -1 for error
-int findFreeBlockIndex() {
+int find_free_block() {
     // there s no free blocks anymore
     if (sb.free_blocks == 0) return -1;
 
@@ -822,6 +969,8 @@ int findFreeBlockIndex() {
 
 
 /*****************************************************************/
+// find index of free inode
+// return index or -1 for error
 int find_free_inode() {
     if (sb.free_nodes == 0) return -1;
 
@@ -836,10 +985,9 @@ int find_free_inode() {
 
 
 /*****************************************************************/
-//this function returns inode of directory/filename
+//this function returns inode of specified path
 //returns -2 if path is correct, but the last element isn t 
 //returns -1 if path is wrong
-//!! don t give NULL parameters !!
 int find_inode_of_path(unsigned char *path, int crt_inode, int *parent_inode, unsigned char **last_file_name) {
     if (path == NULL) return -1;
 
@@ -915,26 +1063,3 @@ int find_inode_of_path(unsigned char *path, int crt_inode, int *parent_inode, un
     // will return necessary inode
     return crt_inode;
 }
-
-
-/*****************************************************************/
-// verify if file/directory exists in a specified directory
-int is_in_directory(unsigned char* filename, int inode) {
-    if (strlen(filename) > MAX_FILE_NAME) return -1;
-
-    // initiate directory
-    directory dir;
-    if (!extract_data(&dir, inode)) {
-        return -1;
-    }
-
-    // looking for file/directory
-    for (int i = 0; i < dir.count; i++) {
-        if (!strcmp(dir.entries[i].filename, filename)) {
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
