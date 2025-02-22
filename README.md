@@ -1,5 +1,7 @@
 # FileSystem Project
-This repository represents a simple simulation of a File System. It's a personal project for improving my knowledge and my skills in C language.
+This repository represents a simple simulation of a File System.
+
+![operating_principle](poza.jpg)
 
 ## About EXT2
 Ext2 or Second Extended File System was the default file system for Linux kerner until supplanted by Ext3 in 2001.
@@ -27,19 +29,18 @@ An inode keeps track of the allocated blocks for a file/folder, the inode of the
 • What about directories?
 The same principle applies as for files, but instead of storing file data, the blocks contain entries (file names and inode indices).
 
-![operating_principle](poza.jpg)
-
 ## Commands
-  COMMAND ------------------------>  ACTION 
-- mkdir <path/directory_name>         create new directory
-- touch <path/file_name>              create new file
-- echo <content> >/>> <path_to_file>  add content to a file
-- rm <path_to_file>                   remove a file
-- rmdir <path_to_directory>           remove an empty directory
-- cd <path_to_directory>              change current location
-- ls <path_to_directory>              list entries of directory
-- pwd                                 show path from root to current directory
-- cat <path_to_file>                  show content of file
+| Command                     | Description                |
+|:----------------------------|:---------------------------|
+|`mkdir <path/directory_name>`| create new directory       |
+|`touch <path/file_name>`     | create new file            |
+|`echo <content> >/>> <path>` | add content to a file      |
+|`rm <path_to_file>`          | remove a file              |
+|`rmdir <path_to_direvtory>`  | remove an empty directory  |
+|`cd <path_to_directory>`     | change current directory   |
+|`ls <path_to_directory>`     | list entries of direvtory  |
+|`pwd`                        | show path                  |
+|`cat <path_to_file>`         | show content of file       |
 
 
 ## Running
