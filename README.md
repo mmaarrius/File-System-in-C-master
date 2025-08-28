@@ -1,3 +1,5 @@
+This is a personal project made for fun, through which I gained a foundational understanding of filesystem functionality. 
+
 # FileSystem Project
 This repository represents a simple simulation of a File System.
 
